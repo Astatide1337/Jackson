@@ -14,17 +14,16 @@
       {
         "label": "main",
         "title": "Jackson",
-        "width": 500,
-        "height": 600,
-        "resizable": false,
         "fullscreen": false,
         "decorations": false,
         "alwaysOnTop": true,
         "skipTaskbar": true,
-        "visible": true,
+        "visible": false,
         "transparent": true,
         "shadow": false,
-        "center": false
+        "center": false,
+        "width": 450,
+        "height": 350
       }
     ],
     "withGlobalTauri": true,

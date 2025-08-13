@@ -1,9 +1,10 @@
-// main.rs - Updated to pass app handle to wake word detector
+// main.rs - Fixed with smooth window positioning and fade-in transitions
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod audio;
 mod speech_recognition;
 mod wake_word;
+
 use wake_word::WakeWordDetector;
 use std::sync::{Arc, Mutex};
 use tauri::menu::{MenuBuilder, MenuItem};
@@ -32,26 +33,25 @@ async fn start_wake_word_detection(
     
     detector.start_listening(move |keyword_index| {
         // Wake word detected!
-        println!("❌ Wake word detected with index: {}! ❌", keyword_index);
-        println!("🎉🎉🎉 HELLO WORLD! WAKE WORD DETECTED! 🎉🎉🎉");
+        println!("🎯 Wake word detected with index: {}!", keyword_index);
+        println!("🎉 HELLO WORLD! WAKE WORD DETECTED! 🎉");
         
-        // Show the window
+        // Show the window with smooth transition
         if let Some(window) = app_clone.get_webview_window("main") {
-            // Position the window at the bottom middle, above the taskbar
-            if let Ok(monitor) = window.primary_monitor() {
-                if let Some(monitor) = monitor {
-                    let size = monitor.size();
-                    let window_size = window.inner_size().unwrap();
-                    window
-                        .set_position(PhysicalPosition::new(
-                            (size.width - window_size.width) / 2,
-                            size.height - window_size.height - 50,
-                        ))
-                        .unwrap();
-                }
+            if let Ok(Some(monitor)) = window.primary_monitor() {
+                let monitor_size = monitor.size();
+                let window_size = window.outer_size().unwrap();
+                let new_pos = PhysicalPosition {
+                    x: (monitor_size.width as i32 - window_size.width as i32) / 2,
+                    y: monitor_size.height as i32 - window_size.height as i32 - 40, // 40px buffer from bottom
+                };
+                window.set_position(new_pos).unwrap();
             }
             window.show().unwrap();
             window.set_focus().unwrap();
+            
+            // Emit window-shown event after window is properly positioned
+            app_clone.emit("window-shown", ()).unwrap();
         }
         
         // Emit an event to the frontend with the keyword index
@@ -76,6 +76,7 @@ fn stop_wake_word_detection(state: State<AppState>) -> Result<(), String> {
 fn hide_window(app: tauri::AppHandle) {
     println!("Hide window command called");
     if let Some(window) = app.get_webview_window("main") {
+        app.emit("window-hidden", ()).unwrap();
         window.hide().unwrap();
     }
 }
@@ -84,22 +85,20 @@ fn hide_window(app: tauri::AppHandle) {
 fn show_window(app: tauri::AppHandle) {
     println!("Show window command called");
     if let Some(window) = app.get_webview_window("main") {
-        // Position the window at the bottom middle, above the taskbar
-        if let Ok(monitor) = window.primary_monitor() {
-            if let Some(monitor) = monitor {
-                let size = monitor.size();
-                let window_size = window.inner_size().unwrap();
-                // Position at bottom middle with some padding from the taskbar
-                window
-                    .set_position(PhysicalPosition::new(
-                        (size.width - window_size.width) / 2,
-                        size.height - window_size.height - 50, // 50px from bottom
-                    ))
-                    .unwrap();
-            }
+        if let Ok(Some(monitor)) = window.primary_monitor() {
+            let monitor_size = monitor.size();
+            let window_size = window.outer_size().unwrap();
+            let new_pos = PhysicalPosition {
+                x: (monitor_size.width as i32 - window_size.width as i32) / 2,
+                y: monitor_size.height as i32 - window_size.height as i32 - 40, // 40px buffer from bottom
+            };
+            window.set_position(new_pos).unwrap();
         }
         window.show().unwrap();
         window.set_focus().unwrap();
+        
+        // Emit window-shown event
+        app.emit("window-shown", ()).unwrap();
     }
 }
 
@@ -107,6 +106,36 @@ fn show_window(app: tauri::AppHandle) {
 fn quit_app(app: tauri::AppHandle) {
     println!("Quit app command called");
     app.exit(0);
+}
+
+#[tauri::command]
+fn set_ignore_cursor_events(app: tauri::AppHandle, ignore: bool) {
+    if let Some(window) = app.get_webview_window("main") {
+        window.set_ignore_cursor_events(ignore).unwrap();
+    }
+}
+
+#[tauri::command]
+fn resize_window(app: tauri::AppHandle, height: f64) {
+    if let Some(window) = app.get_webview_window("main") {
+        if let Ok(true) = window.is_visible() {
+            if let Ok(Some(monitor)) = window.primary_monitor() {
+                let monitor_size = monitor.size();
+                let max_height = monitor_size.height as f64 * 0.9; // 90% of screen height
+                let new_height = height.min(max_height);
+
+                let current_size = window.outer_size().unwrap();
+                window.set_size(tauri::LogicalSize::new(current_size.width as f64 / monitor.scale_factor(), new_height / monitor.scale_factor())).unwrap();
+
+                // Recalculate and set position to keep it at the bottom
+                let new_pos = PhysicalPosition {
+                    x: (monitor_size.width as i32 - current_size.width as i32) / 2,
+                    y: monitor_size.height as i32 - (new_height as i32) - 40, // 40px buffer from bottom
+                };
+                window.set_position(new_pos).unwrap();
+            }
+        }
+    }
 }
 
 fn main() {
@@ -138,6 +167,10 @@ fn main() {
                 .build()
                 .unwrap();
             
+            if let Some(window) = app.get_webview_window("main") {
+                window.set_ignore_cursor_events(true).unwrap();
+            }
+
             let _tray = TrayIconBuilder::new()
                 .menu(&menu)
                 .tooltip(tooltip)
@@ -159,7 +192,6 @@ fn main() {
                         _ => {}
                     }
                 })
-                // In main.rs, update the tray icon event handler
                 .on_tray_icon_event(|tray, event| {
                     match event {
                         TrayIconEvent::Click { button, .. } => {
@@ -179,15 +211,6 @@ fn main() {
                 .build(app)
                 .unwrap();
             
-            // Hide the main window after setup is complete
-            if let Some(window) = app.get_webview_window("main") {
-                // Give the window a moment to initialize before hiding
-                tauri::async_runtime::spawn(async move {
-                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-                    window.hide().unwrap();
-                });
-            }
-            
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -195,7 +218,9 @@ fn main() {
             stop_wake_word_detection,
             hide_window,
             show_window,
-            quit_app
+            quit_app,
+            resize_window,
+            set_ignore_cursor_events,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

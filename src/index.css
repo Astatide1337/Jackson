@@ -1,33 +1,323 @@
 @import "tailwindcss";
 
-@tailwind utilities;
+/* Custom animations for smooth transitions */
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px) scale(0.95);
+    will-change: opacity, transform;
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    will-change: auto;
+  }
+}
 
-/* Glass morphism effect */
-body {
-  background-color: transparent;
+@keyframes fadeInScale {
+  from {
+    opacity: 0;
+    transform: scale(0.9);
+    will-change: opacity, transform;
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+    will-change: auto;
+  }
+}
+
+@keyframes slideInFromBottom {
+  from {
+    opacity: 0;
+    transform: translateY(30px);
+    will-change: opacity, transform;
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+    will-change: auto;
+  }
+}
+
+@keyframes gentlePulse {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 1;
+    will-change: transform, opacity;
+  }
+  50% {
+    transform: scale(1.05);
+    opacity: 0.9;
+    will-change: transform, opacity;
+  }
+}
+
+@keyframes smoothBounce {
+  0%, 20%, 53%, 80%, 100% {
+    transform: translateY(0);
+    will-change: transform;
+  }
+  40% {
+    transform: translateY(-8px);
+    will-change: transform;
+  }
+  70% {
+    transform: translateY(-4px);
+    will-change: transform;
+  }
+}
+
+/* Root styles */
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  overflow: hidden; /* Prevent scrollbars on window */
+  background: transparent;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+}
+
+#root {
+  background: transparent;
+  min-height: 100vh;
+  width: 100vw;
+}
+
+/* Enhanced transition classes with proper easing */
+.transition-smooth {
+  transition: all 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+  will-change: opacity, transform;
+}
+
+.transition-content {
+  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  will-change: opacity, transform, max-height, padding;
+}
+
+.transition-fast {
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  will-change: opacity, transform;
+}
+
+/* Backdrop blur enhancements */
+.backdrop-blur-enhanced {
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+}
+
+/* index.css - Add these classes for smoother window resizing */
+.window-content {
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  will-change: height, width;
+}
+
+/* Enhanced window resizing animation */
+.resize-animation {
+  transition: height 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+              width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  will-change: height, width;
+}
+
+/* Smooth content transitions during resize */
+.content-transition {
+  transition: all 0.2s ease-out;
+  will-change: transform, opacity;
+}
+
+.content-container {
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-width: 350px;
+  min-height: 200px;
+  width: 100%;
+  height: 100%;
+}
+
+/* Smooth transitions for all resizing elements */
+.resize-transition {
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  will-change: width, height, padding, margin;
+}
+
+/* Ensure text wraps properly and doesn't cause overflow */
+.text-wrap {
+  word-wrap: break-word;
+  word-break: break-word;
+  hyphens: auto;
+  overflow-wrap: break-word;
+  max-width: 100%;
+}
+
+/* Prevent content from being cut off during animations */
+.preserve-content {
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  padding: 1rem;
+  box-sizing: border-box;
+}
+
+/* Enhanced window resizing animation */
+.window-resize {
+  transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+              height 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  will-change: width, height;
+}
+
+/* Custom window fade-in animation */
+.window-fade-in {
+  animation: fadeInUp 0.6s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+  will-change: opacity, transform;
+}
+
+/* Window container transitions for opacity and transform only */
+.window-transition {
+  transition: opacity 0.6s cubic-bezier(0.4, 0, 0.2, 1),
+              transform 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+  will-change: opacity, transform;
+}
+
+/* Content area animations */
+.content-fade-in {
+  animation: fadeInScale 0.4s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+  will-change: opacity, transform;
+}
+
+.content-slide-in {
+  animation: slideInFromBottom 0.4s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+  will-change: opacity, transform;
+}
+
+/* Enhanced pulse for listening indicator */
+.pulse-enhanced {
+  animation: gentlePulse 2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  will-change: transform, opacity;
+}
+
+/* Smoother bounce for loading dots */
+.bounce-smooth {
+  animation: smoothBounce 1.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  will-change: transform;
+}
+
+/* Glass morphism effects */
+.glass {
+  background: rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+}
+
+.glass-dark {
+  background: rgba(0, 0, 0, 0.3);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.5);
+}
+
+/* Smooth scaling for content boxes */
+.scale-smooth {
+  transition: transform 0.6s cubic-bezier(0.4, 0, 0.2, 1),
+              opacity 0.6s cubic-bezier(0.4, 0, 0.2, 1),
+              max-height 0.6s cubic-bezier(0.4, 0, 0.2, 1),
+              padding 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+  will-change: transform, opacity, max-height, padding;
+}
+
+/* Enhance existing animations */
+.animate-pulse {
+  animation: gentlePulse 2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  will-change: transform, opacity;
+}
+
+.animate-bounce {
+  animation: smoothBounce 1.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  will-change: transform;
+}
+
+/* Smooth text animations */
+.text-fade-in {
+  transition: opacity 0.4s cubic-bezier(0.4, 0, 0.2, 1),
+              transform 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  will-change: opacity, transform;
+}
+
+/* Container smooth resizing */
+.resize-smooth {
+  transition: all 0.3s ease-in-out;
+  will-change: height, width, max-width;
+}
+
+/* Prevent text selection for smoother feel */
+.no-select {
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
   user-select: none;
 }
 
-/* Custom animations */
-@keyframes pulse-ring {
-  0% {
-    transform: scale(0.8);
-    opacity: 1;
-  }
-  100% {
-    transform: scale(2.4);
-    opacity: 0;
+/* Smooth hover effects */
+.hover-smooth {
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  will-change: transform, box-shadow;
+}
+
+.hover-smooth:hover {
+  transform: translateY(-2px) scale(1.02);
+  box-shadow: 0 12px 40px 0 rgba(0, 0, 0, 0.4);
+  will-change: transform, box-shadow;
+}
+
+/* Custom scrollbar for transcript area */
+.custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.3) transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background-color: rgba(255, 255, 255, 0.3);
+  border-radius: 3px;
+  transition: background-color 0.3s ease;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(255, 255, 255, 0.5);
+}
+
+/* Media queries for responsive animations */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
 }
 
-.animate-ping {
-  animation: pulse-ring 1.5s cubic-bezier(0, 0, 0.2, 1) infinite;
-}
-
-/* Prevent text selection */
-.no-select {
-  -webkit-user-select: none; /* Safari */
-  -ms-user-select: none; /* IE 10+ */
-  user-select: none; /* Standard syntax */
+/* High DPI display optimizations */
+@media (-webkit-min-device-pixel-ratio: 2), (min-resolution: 192dpi) {
+  .backdrop-blur-enhanced {
+    backdrop-filter: blur(25px) saturate(200%);
+    -webkit-backdrop-filter: blur(25px) saturate(200%);
+  }
 }
