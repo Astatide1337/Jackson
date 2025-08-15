@@ -1,11 +1,11 @@
-// wake_word.rs - Cleaned up version with Web Speech API integration
+// wake_word.rs - Updated to only detect "Hey Jackson" precisely
 use crate::audio::AudioCapture;
 use anyhow::Result;
 use sapi_lite::stt::{Recognizer, Rule, SyncContext};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
-use tauri::{AppHandle, Emitter};
+use tauri::AppHandle;
 
 // Windows Speech Recognition-based wake word detector using sapi_lite
 pub struct WakeWordDetector {
@@ -81,10 +81,10 @@ impl WakeWordDetector {
                 }
             };
             
-            // Create a grammar with the wake word "Hey Jackson"
+            // Create a grammar with the wake word "Hey Jackson" - more precise matching
             let grammar = match ctx
                 .grammar_builder()
-                .add_rule(&Rule::text("Hey Jackson"))
+                .add_rule(&Rule::text("Hey Jackson")) // Exact match
                 .build()
             {
                 Ok(grammar) => grammar,
@@ -115,11 +115,11 @@ impl WakeWordDetector {
                 match ctx.recognize(Duration::from_millis(500)) {
                     Ok(Some(phrase)) => {
                         let text = phrase.text.to_string_lossy();
-                        println!("🔊 Recognized: {}", text);
+                        println!("🔊 Recognized: \"{}\"", text);
                         
                         // Check if "Hey Jackson" was recognized
-                        if text.to_lowercase().contains("hey jackson") {
-                            println!("🎯 Wake word detected!");
+                        if text.trim().eq_ignore_ascii_case("hey jackson") {
+                            println!("🎯 Wake word detected with high confidence!");
                             callback(0); // Index 0 for "Hey Jackson"
                         }
                     }

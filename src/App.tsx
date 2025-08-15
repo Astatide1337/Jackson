@@ -1,10 +1,9 @@
-// App.tsx - Fixed with smooth transitions and proper timeout handling
+// App.tsx - Fixed window resizing with content-based triggers
 import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import "./index.css";
 
-// Speech Recognition interfaces
 interface SpeechRecognitionEvent extends Event {
   results: SpeechRecognitionResultList;
   resultIndex: number;
@@ -50,41 +49,44 @@ function App() {
   const [userSpeech, setUserSpeech] = useState("");
   const [isProcessing, setIsProcessing] = useState(false);
   const [isSpeechListening, setIsSpeechListening] = useState(false);
-  const [fullTranscript, setFullTranscript] = useState("");
   const [isWindowVisible, setIsWindowVisible] = useState(false);
   const [lastSpeechTime, setLastSpeechTime] = useState<Date>(new Date());
-
+  const [wakeWordDetected, setWakeWordDetected] = useState(false);
+  
   const speechTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const speechRecognitionRef = useRef<SpeechRecognition | null>(null);
   const isRecognitionActiveRef = useRef(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const hasDetectedSpeechRef = useRef(false);
+  
+  // New resize management refs
   const resizeTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const isFirstResizeRef = useRef(true);
-
+  const isResizingRef = useRef(false);
+  const lastResizeContentRef = useRef({ userSpeech: "", isProcessing: false });
+  const pendingResizeRef = useRef(false);
+  
   // Initialize Web Speech API
   const initializeSpeechRecognition = () => {
     if ("webkitSpeechRecognition" in window || "SpeechRecognition" in window) {
       const SpeechRecognition =
         window.SpeechRecognition || window.webkitSpeechRecognition;
       const recognition = new SpeechRecognition();
-
       recognition.continuous = true;
       recognition.interimResults = true;
       recognition.lang = "en-US";
       recognition.maxAlternatives = 1;
-
+      
       recognition.onstart = () => {
         console.log("🎙️ Web Speech Recognition started");
         setIsSpeechListening(true);
         isRecognitionActiveRef.current = true;
         hasDetectedSpeechRef.current = false;
       };
-
+      
       recognition.onresult = (event: SpeechRecognitionEvent) => {
         let interimTranscript = "";
         let finalTranscript = "";
-
+        
         for (let i = event.resultIndex; i < event.results.length; i++) {
           const transcript = event.results[i][0].transcript;
           if (event.results[i].isFinal) {
@@ -93,7 +95,7 @@ function App() {
             interimTranscript += transcript;
           }
         }
-
+        
         // Update the display with interim results
         if (interimTranscript) {
           setUserSpeech(interimTranscript);
@@ -101,24 +103,17 @@ function App() {
           setLastSpeechTime(new Date());
           hasDetectedSpeechRef.current = true;
           resetSpeechTimeout();
-
-          // Show window only when we have actual speech
-          if (!isWindowVisible) {
-            setIsWindowVisible(true);
-          }
         }
-
+        
         // Handle final results
         if (finalTranscript) {
           const cleanTranscript = finalTranscript.trim();
-          setFullTranscript((prev) => prev + cleanTranscript + " ");
           setUserSpeech(cleanTranscript);
           setIsProcessing(false);
           setLastSpeechTime(new Date());
           hasDetectedSpeechRef.current = true;
-
           console.log("🗣️ Final speech:", cleanTranscript);
-
+          
           // Check for stop commands
           if (
             cleanTranscript.toLowerCase().includes("stop listening") ||
@@ -128,19 +123,17 @@ function App() {
             hideWindow();
             return;
           }
-
+          
           resetSpeechTimeout();
         }
       };
-
+      
       recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
         console.error("Speech recognition error:", event.error);
-
         if (event.error === "no-speech") {
           // No speech detected, continue listening
           return;
         }
-
         if (event.error === "not-allowed") {
           setStatusMessage(
             "Microphone access denied. Please allow microphone access."
@@ -162,11 +155,10 @@ function App() {
           }
         }
       };
-
+      
       recognition.onend = () => {
         console.log("🛑 Web Speech Recognition ended");
         setIsSpeechListening(false);
-
         // Restart recognition if we're supposed to be listening
         if (isRecognitionActiveRef.current && isWindowVisible) {
           try {
@@ -177,19 +169,18 @@ function App() {
           }
         }
       };
-
+      
       speechRecognitionRef.current = recognition;
       return true;
     }
     return false;
   };
-
+  
   const startSpeechRecognition = () => {
     if (speechRecognitionRef.current && !isSpeechListening) {
       try {
         isRecognitionActiveRef.current = true;
         speechRecognitionRef.current.start();
-        setFullTranscript("");
         setUserSpeech("");
         setIsProcessing(false);
         setLastSpeechTime(new Date());
@@ -202,7 +193,7 @@ function App() {
       }
     }
   };
-
+  
   const stopSpeechRecognition = () => {
     if (speechRecognitionRef.current && isSpeechListening) {
       isRecognitionActiveRef.current = false;
@@ -211,38 +202,162 @@ function App() {
       setIsProcessing(false);
       console.log("🛑 Stopping continuous speech recognition...");
     }
-
+    
     // Clear speech timeout
     if (speechTimeoutRef.current) {
       clearTimeout(speechTimeoutRef.current);
       speechTimeoutRef.current = null;
     }
   };
-
+  
   // Reset speech timeout - if no transcribed speech for 10 seconds, hide window
   const resetSpeechTimeout = () => {
     if (speechTimeoutRef.current) {
       clearTimeout(speechTimeoutRef.current);
     }
-
+    
     speechTimeoutRef.current = setTimeout(() => {
       console.log("🕐 No speech transcription for 10 seconds, hiding window");
       hideWindow();
     }, 10000); // 10 seconds of no transcribed speech
   };
+  
+  // Calculate window size based on content - optimized for minimal design
+  const calculateWindowSize = () => {
+    if (!containerRef.current) return { width: 520, height: 220 };
+    
+    // Create a temporary clone to measure actual content size
+    const container = containerRef.current;
+    const clone = container.cloneNode(true) as HTMLElement;
+    
+    // Set up the clone for measurement
+    clone.style.position = "absolute";
+    clone.style.visibility = "hidden";
+    clone.style.height = "auto";
+    clone.style.width = "100%"; // Use the same width constraints
+    clone.style.maxWidth = "42rem"; // max-w-2xl
+    clone.style.overflow = "visible";
+    
+    document.body.appendChild(clone);
+    
+    // Measure the clone
+    const contentWidth = clone.scrollWidth;
+    const contentHeight = clone.scrollHeight;
+    
+    document.body.removeChild(clone);
+    
+    // Add padding to the content size to get the final window size.
+    // p-6 on root = 1.5rem * 2 = 3rem = 48px
+    const finalWidth = Math.min(contentWidth + 48, 800);
+    const finalHeight = Math.min(contentHeight + 48, 600);
 
+    return { width: finalWidth, height: finalHeight };
+  };
+  
+  // Check if content change is significant enough to warrant a resize
+  const isSignificantContentChange = (newUserSpeech: string, newIsProcessing: boolean) => {
+    const lastContent = lastResizeContentRef.current;
+    
+    // Check for significant text length changes (more than 25 characters or 40% change)
+    const speechLengthDiff = Math.abs(newUserSpeech.length - lastContent.userSpeech.length);
+    const speechPercentChange = lastContent.userSpeech.length > 0 ? speechLengthDiff / lastContent.userSpeech.length : 1;
+    
+    // Processing state change is always significant
+    if (newIsProcessing !== lastContent.isProcessing) {
+      return true;
+    }
+    
+    // First content appearance is always significant
+    if ((lastContent.userSpeech === "" && newUserSpeech !== "")) {
+      return true;
+    }
+    
+    // Significant if text length changed by more than 25 chars or 40%
+    return speechLengthDiff > 25 || speechPercentChange > 0.4;
+  };
+  
+  // Trigger window resize with content-based logic
+  const triggerWindowResize = (newUserSpeech: string, newIsProcessing: boolean) => {
+    // Skip if we're already resizing or window is not visible
+    if (!isTauriContext || !isWindowVisible || isResizingRef.current) {
+      return;
+    }
+    
+    // Check if this is a significant content change
+    if (!isSignificantContentChange(newUserSpeech, newIsProcessing)) {
+      return;
+    }
+    
+    console.log("🔄 Content change detected, scheduling resize");
+    
+    // Mark that we have a pending resize
+    pendingResizeRef.current = true;
+    
+    // Clear any existing timeout
+    if (resizeTimeoutRef.current) {
+      clearTimeout(resizeTimeoutRef.current);
+    }
+    
+    // Debounce the resize operation
+    resizeTimeoutRef.current = setTimeout(() => {
+      if (!pendingResizeRef.current || !containerRef.current || !isWindowVisible) {
+        return;
+      }
+      
+      // Mark as resizing to prevent loops
+      isResizingRef.current = true;
+      pendingResizeRef.current = false;
+      
+      // Calculate new size
+      const newSize = calculateWindowSize();
+      
+      console.log(`📏 Resizing window to: ${newSize.width}x${newSize.height}`);
+      
+      // Update last resize content reference
+      lastResizeContentRef.current = {
+        userSpeech: newUserSpeech,
+        isProcessing: newIsProcessing
+      };
+      
+      // Call the combined resize and position function with smooth transition
+      invoke("resize_and_position_window", { 
+        width: newSize.width, 
+        height: newSize.height 
+      }).then(() => {
+        console.log("✅ Window resized successfully");
+        // Allow future resizes after a longer delay to prevent jerky animations
+        setTimeout(() => {
+          isResizingRef.current = false;
+        }, 400);
+      }).catch(e => {
+        console.error("❌ Failed to resize window:", e);
+        isResizingRef.current = false;
+      });
+    }, 400); // Longer debounce for much smoother experience
+  };
+  
+  // Content change monitoring effects
+  useEffect(() => {
+    triggerWindowResize(userSpeech, isProcessing);
+  }, [userSpeech, isProcessing, isWindowVisible]);
+  
   const hideWindow = () => {
     stopSpeechRecognition();
     setUserSpeech("");
-    setFullTranscript("");
     setIsProcessing(false);
     setIsWindowVisible(false);
+    setWakeWordDetected(false);
     hasDetectedSpeechRef.current = false;
-
+    
+    // Reset resize state
+    isResizingRef.current = false;
+    pendingResizeRef.current = false;
+    lastResizeContentRef.current = { userSpeech: "", isProcessing: false };
+    
     if (isTauriContext) {
       invoke("hide_window");
     }
-
+    
     // Clear timeouts
     if (speechTimeoutRef.current) {
       clearTimeout(speechTimeoutRef.current);
@@ -253,75 +368,42 @@ function App() {
       resizeTimeoutRef.current = null;
     }
   };
-
+  
   // Handle window visibility events
   useEffect(() => {
     let unlistenShow: (() => void) | undefined;
     let unlistenHide: (() => void) | undefined;
-
+    
     if (isTauriContext) {
       // Listen for window show event
       listen("window-shown", () => {
         setIsWindowVisible(true);
+        // Reset resize state when window is shown
+        isResizingRef.current = false;
+        pendingResizeRef.current = false;
         console.log("✅ Window shown");
       }).then((unlisten) => {
         unlistenShow = unlisten;
       });
-
+      
       // Listen for window hide event
       listen("window-hidden", () => {
         setIsWindowVisible(false);
+        // Reset resize state when window is hidden
+        isResizingRef.current = false;
+        pendingResizeRef.current = false;
         console.log("🙈 Window hidden");
       }).then((unlisten) => {
         unlistenHide = unlisten;
       });
     }
-
+    
     return () => {
       unlistenShow?.();
       unlistenHide?.();
     };
   }, [isTauriContext]);
-
-  useEffect(() => {
-    if (!isTauriContext || !containerRef.current || !isWindowVisible) {
-      isFirstResizeRef.current = true; // Reset on hide
-      return;
-    }
-    const container = containerRef.current;
-    const resizeObserver = new ResizeObserver((entries) => {
-      if (isFirstResizeRef.current) {
-        isFirstResizeRef.current = false;
-        return; // Skip the very first resize observation
-      }
-      for (let entry of entries) {
-        const { scrollWidth, scrollHeight } = entry.target;
-
-        // Calculate new dimensions with padding but ensure they don't exceed max
-        // Base width on content length with some flexibility
-        let newWidth = Math.min(Math.max(scrollWidth + 60, 400), 800); // Add padding, min 400px, max 800px
-
-        // For longer text, increase width more
-        if (fullTranscript.length > 100) {
-          newWidth = Math.min(newWidth + 50, 800);
-        }
-
-        const newHeight = Math.min(Math.max(scrollHeight + 60, 350), 600); // Add padding, min 350px, max 600px
-
-        // Invoke the resize command with both width and height
-        invoke("resize_window", { width: newWidth, height: newHeight });
-      }
-    });
-    // Delay observation slightly to let the window stabilize
-    const timer = setTimeout(() => {
-      resizeObserver.observe(container);
-    }, 100);
-
-    return () => {
-      clearTimeout(timer);
-      resizeObserver.unobserve(container);
-    };
-  }, [isTauriContext, isWindowVisible, fullTranscript, userSpeech]);
+  
   useEffect(() => {
     // Check if we're in a Tauri context
     const checkTauriContext = () => {
@@ -330,17 +412,17 @@ function App() {
       setIsTauriContext(isTauri);
       return isTauri;
     };
-
+    
     // Initialize speech recognition
     const speechSupported = initializeSpeechRecognition();
     if (!speechSupported) {
       console.warn("Web Speech API not supported in this browser");
       setStatusMessage("Speech recognition not supported in this browser");
     }
-
+    
     // This effect handles the lifecycle of the Tauri event listener.
     let unlisten: (() => void) | undefined;
-
+    
     const initialize = async () => {
       // Check if we are in a Tauri environment.
       if (!checkTauriContext()) {
@@ -348,24 +430,29 @@ function App() {
         setStatusMessage("Web mode - limited functionality");
         return;
       }
-
+      
       try {
         // Set up the event listener for wake word detection.
         unlisten = await listen("wake-word-detected", (event) => {
           const payload = event.payload as { keyword_index: number };
           const keyword_index = payload.keyword_index;
-
           const keywords = ["Hey Jackson"];
           const keyword = keywords[keyword_index] || "Unknown";
-
+          
           setDetectionCount((prev) => prev + 1);
           setStatusMessage(`Listening for speech...`);
           setUserSpeech("");
-          setFullTranscript("");
           setLastSpeechTime(new Date());
-
+          setWakeWordDetected(true);
+          setIsWindowVisible(true);
+          
+          // Reset resize state on wake word detection
+          isResizingRef.current = false;
+          pendingResizeRef.current = false;
+          lastResizeContentRef.current = { userSpeech: "", isProcessing: false };
+          
           console.log(`🎯 Wake word "${keyword}" detected!`);
-
+          
           // Start Web Speech API recognition and timeout
           if (speechSupported) {
             setTimeout(() => {
@@ -374,7 +461,7 @@ function App() {
             }, 500); // Small delay to ensure UI updates
           }
         });
-
+        
         // Start the backend wake word detection
         await invoke("start_wake_word_detection");
         setStatusMessage('Listening for "Hey Jackson"...');
@@ -390,12 +477,12 @@ function App() {
         setInitializationError(true);
       }
     };
-
+    
     // Add a small delay to ensure Tauri API is ready
     const timer = setTimeout(() => {
       initialize();
     }, 100);
-
+    
     // Cleanup function
     return () => {
       clearTimeout(timer);
@@ -403,18 +490,19 @@ function App() {
       if (speechTimeoutRef.current) {
         clearTimeout(speechTimeoutRef.current);
       }
+      if (resizeTimeoutRef.current) {
+        clearTimeout(resizeTimeoutRef.current);
+      }
       stopSpeechRecognition();
     };
   }, []);
-
+  
+  // Only render the UI when wake word is detected and speech is active
   return (
     <>
-      {/* Only render the UI when actively listening to speech */}
-      {isWindowVisible && isSpeechListening && (
-        // App.tsx - Add this to the container div for smoother content transitions
+      {isWindowVisible && wakeWordDetected && isSpeechListening && (
         <div
-          ref={containerRef}
-          className={`min-h-screen flex items-end justify-center p-4 bg-gradient-to-br from-transparent to-transparent transition-all duration-300 ease-out preserve-content`}
+          className={`h-screen flex items-center justify-center p-6 bg-gradient-to-br from-transparent to-transparent window-fade-in`}
           onMouseEnter={() =>
             invoke("set_ignore_cursor_events", { ignore: false })
           }
@@ -422,90 +510,60 @@ function App() {
             invoke("set_ignore_cursor_events", { ignore: true })
           }
         >
-          <div className="w-full resize-smooth window-resize content-container">
-            <div className="backdrop-blur-2xl bg-white/10 dark:bg-black/30 rounded-2xl border border-white/20 shadow-2xl overflow-hidden resize-transition">
-              <div className="p-6 resize-transition">
-                <div className="flex flex-col items-center justify-center space-y-4">
-                  {/* Animated listening indicator */}
+          <div ref={containerRef} className="w-full max-w-2xl">
+            {/* Main glassmorphism container */}
+            <div className="relative backdrop-blur-3xl bg-white/5 dark:bg-black/10 rounded-3xl border border-white/10 shadow-2xl overflow-visible no-select">
+              
+              {/* Subtle gradient overlay */}
+              <div className="absolute inset-0 bg-gradient-to-br from-white/5 to-transparent rounded-3xl pointer-events-none"></div>
+              
+              <div className="relative p-8">
+                <div className="flex flex-col items-center space-y-6">
+                  
+                  {/* Minimalist microphone icon with subtle animation */}
                   <div className="relative">
-                    <div className="w-16 h-16 rounded-full flex items-center justify-center bg-green-500/20 animate-pulse">
-                      <div className="w-8 h-8 rounded-full bg-green-500 animate-ping"></div>
+                    <div className="w-20 h-20 rounded-full bg-gradient-to-br from-blue-500/20 to-purple-500/20 flex items-center justify-center backdrop-blur-sm border border-white/10">
+                      {/* Microphone SVG */}
+                      <svg 
+                        width="32" 
+                        height="32" 
+                        viewBox="0 0 24 24" 
+                        fill="none" 
+                        className="text-white/90"
+                      >
+                        <rect x="9" y="2" width="6" height="11" rx="3" stroke="currentColor" strokeWidth="2" />
+                        <path d="M19 10v1a7 7 0 0 1-14 0v-1" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                        <line x1="12" y1="18" x2="12" y2="22" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                        <line x1="8" y1="22" x2="16" y2="22" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                      </svg>
                     </div>
-
-                    {/* Outer ring animation */}
-                    <div className="absolute inset-0 rounded-full border-2 animate-ping border-green-400/30"></div>
+                    
+                    {/* Subtle pulsing ring for active state */}
+                    {isSpeechListening && (
+                      <div className="absolute inset-0 rounded-full border-2 border-blue-400/30 animate-ping"></div>
+                    )}
                   </div>
-
-                  {/* Status and content */}
-                  <div className="text-center space-y-2">
-                    <h1 className="text-2xl font-bold text-white drop-shadow-lg">
-                      Jackson Assistant
-                    </h1>
-                    <p className="text-white/90 text-base font-medium">
-                      {statusMessage}
+                  
+                  {/* Clean status text */}
+                  <div className="text-center">
+                    <p className="text-white/80 text-xl font-medium">
+                      {isProcessing ? "Processing..." : "Listening"}
                     </p>
-
-                    {/* Current speech display with smooth transitions */}
-                    {userSpeech && (
-                      <div className="mt-3 p-3 bg-blue-500/10 rounded-xl border border-blue-500/20 backdrop-blur-sm">
-                        <p className="text-blue-200 text-base">
-                          {isProcessing ? "🎙️ " : "✅ "}
-                          {userSpeech}
-                        </p>
-                        {isProcessing && (
-                          <div className="flex items-center justify-center mt-2 space-x-1">
-                            <div className="w-2 h-2 bg-blue-400 rounded-full animate-bounce"></div>
-                            <div
-                              className="w-2 h-2 bg-blue-400 rounded-full animate-bounce"
-                              style={{ animationDelay: "0.2s" }}
-                            ></div>
-                            <div
-                              className="w-2 h-2 bg-blue-400 rounded-full animate-bounce"
-                              style={{ animationDelay: "0.4s" }}
-                            ></div>
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    {/* Full transcript display with smooth horizontal and vertical expansion */}
-                    {fullTranscript && (
-                      <div className="mt-3 p-4 bg-gray-500/10 rounded-xl border border-gray-500/20 backdrop-blur-sm max-h-48 overflow-y-auto resize-transition text-wrap">
-                        <p className="text-xs text-gray-300 mb-2">
-                          Full Transcript:
-                        </p>
-                        <p className="text-gray-200 text-sm break-words leading-relaxed text-wrap">
-                          {fullTranscript.trim()}
-                        </p>
-                      </div>
-                    )}
-
-                    <div className="flex items-center justify-center space-x-4 text-xs">
-                      <p className="text-blue-300">
-                        Detections: {detectionCount}
-                      </p>
-                      <div className="flex items-center space-x-1">
-                        <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
-                        <span className="text-green-300">Speech Active</span>
-                      </div>
-                    </div>
-
-                    <div className="mt-3 p-3 bg-green-500/10 rounded-xl border border-green-500/20 backdrop-blur-sm">
-                      <p className="text-green-300 font-bold text-lg">
-                        I'm listening! 🎙️
-                      </p>
-                      <p className="text-green-400 text-base">
-                        Speak now - I'll hear everything you say
-                      </p>
-                    </div>
                   </div>
+                  
+                  {/* Current speech - clean bubble design */}
+                  {userSpeech && (
+                    <p className="text-white/90 text-2xl text-center font-medium leading-relaxed transition-smooth content-fade-in">
+                      {userSpeech}
+                    </p>
+                  )}
                 </div>
               </div>
             </div>
           </div>
         </div>
       )}
-
+      
       {/* The window is hidden, so render nothing */}
     </>
   );

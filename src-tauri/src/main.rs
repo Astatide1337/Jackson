@@ -1,4 +1,4 @@
-// main.rs - Fixed with smooth window positioning and fade-in transitions
+// main.rs - Updated with improved resizing and positioning
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod audio;
@@ -11,9 +11,33 @@ use tauri::menu::{MenuBuilder, MenuItem};
 use tauri::tray::{TrayIconBuilder, TrayIconEvent};
 use tauri::PhysicalPosition;
 use tauri::{Emitter, Manager, State};
+use std::time::Duration;
 
 struct AppState {
     wake_word_detector: Arc<Mutex<Option<WakeWordDetector>>>,
+    last_resize_time: Arc<Mutex<std::time::Instant>>,
+}
+
+// Helper function to calculate position for given window dimensions at the top center
+fn calculate_top_center_position(window: &tauri::WebviewWindow, width: u32) -> Result<PhysicalPosition<i32>, String> {
+    if let Ok(monitor) = window.primary_monitor() {
+        if let Some(monitor) = monitor {
+            let work_area = monitor.work_area();
+            
+            // Calculate position: centered horizontally, 50px from top of work area
+            // Convert all values to i32 for calculations
+            let work_x = work_area.position.x;
+            let work_y = work_area.position.y;
+            let work_width = work_area.size.width as i32;
+            let window_width = width as i32;
+            
+            let x = work_x + (work_width - window_width) / 2;
+            let y = work_y + 50; // Position 50px from the top of the work area
+            
+            return Ok(PhysicalPosition::new(x, y));
+        }
+    }
+    Err("Failed to get monitor information".to_string())
 }
 
 #[tauri::command]
@@ -38,14 +62,22 @@ async fn start_wake_word_detection(
         
         // Show the window with smooth transition
         if let Some(window) = app_clone.get_webview_window("main") {
-            if let Ok(Some(monitor)) = window.primary_monitor() {
-                let monitor_size = monitor.size();
-                let window_size = window.outer_size().unwrap();
-                let new_pos = PhysicalPosition {
-                    x: (monitor_size.width as i32 - window_size.width as i32) / 2,
-                    y: monitor_size.height as i32 - window_size.height as i32 - 40, // 40px buffer from bottom
-                };
-                window.set_position(new_pos).unwrap();
+            // Remove max size constraints
+            window.set_max_size(None::<tauri::LogicalSize<f64>>)
+                .unwrap_or_else(|e| eprintln!("Failed to remove max size: {:?}", e));
+
+            // Set initial size and position atomically
+            let initial_width = 480;
+            let initial_height = 320;
+            
+            // Calculate position first
+            if let Ok(position) = calculate_top_center_position(&window, initial_width) {
+                // Set size and position together to minimize visual artifacts
+                window.set_size(tauri::LogicalSize::new(initial_width as f64, initial_height as f64))
+                    .unwrap_or_else(|e| eprintln!("Failed to set initial size: {:?}", e));
+                
+                window.set_position(position)
+                    .unwrap_or_else(|e| eprintln!("Failed to set initial position: {:?}", e));
             }
             window.show().unwrap();
             window.set_focus().unwrap();
@@ -85,14 +117,22 @@ fn hide_window(app: tauri::AppHandle) {
 fn show_window(app: tauri::AppHandle) {
     println!("Show window command called");
     if let Some(window) = app.get_webview_window("main") {
-        if let Ok(Some(monitor)) = window.primary_monitor() {
-            let monitor_size = monitor.size();
-            let window_size = window.outer_size().unwrap();
-            let new_pos = PhysicalPosition {
-                x: (monitor_size.width as i32 - window_size.width as i32) / 2,
-                y: monitor_size.height as i32 - window_size.height as i32 - 40, // 40px buffer from bottom
-            };
-            window.set_position(new_pos).unwrap();
+        // Remove max size constraints
+        window.set_max_size(None::<tauri::LogicalSize<f64>>)
+            .unwrap_or_else(|e| eprintln!("Failed to remove max size: {:?}", e));
+
+        // Get current window size or set initial size
+        let current_size = window.inner_size().unwrap_or(tauri::PhysicalSize::new(480, 320));
+        let width = current_size.width;
+        let height = current_size.height;
+        
+        // Calculate and set position atomically
+        if let Ok(position) = calculate_top_center_position(&window, width) {
+            window.set_size(tauri::LogicalSize::new(width as f64, height as f64))
+                .unwrap_or_else(|e| eprintln!("Failed to set size: {:?}", e));
+            
+            window.set_position(position)
+                .unwrap_or_else(|e| eprintln!("Failed to set position: {:?}", e));
         }
         window.show().unwrap();
         window.set_focus().unwrap();
@@ -103,39 +143,129 @@ fn show_window(app: tauri::AppHandle) {
 }
 
 #[tauri::command]
-fn quit_app(app: tauri::AppHandle) {
-    println!("Quit app command called");
-    app.exit(0);
+fn resize_window(app: tauri::AppHandle, width: f64, height: f64, state: State<AppState>) {
+    // Rate limit resize operations to prevent excessive calls
+    {
+        let mut last_resize = state.last_resize_time.lock().unwrap();
+        let now = std::time::Instant::now();
+        if now.duration_since(*last_resize) < Duration::from_millis(100) {
+            println!("🚫 Resize rate limited");
+            return;
+        }
+        *last_resize = now;
+    }
+    
+    if let Some(window) = app.get_webview_window("main") {
+        // Only resize if window is visible
+        if let Ok(true) = window.is_visible() {
+            // Remove max size constraints, just use minimums
+            let new_width = width.max(350.0); // Min width of 350px
+            let new_height = height.max(200.0); // Min height of 200px
+            
+            // Get current window size for comparison
+            let current_size = window.inner_size().unwrap_or(tauri::PhysicalSize::new(400, 300));
+            let current_width = current_size.width as f64;
+            let current_height = current_size.height as f64;
+            
+            // Only resize if the size actually changes significantly
+            if (current_width - new_width).abs() > 10.0 || (current_height - new_height).abs() > 10.0 {
+                println!("📏 Resizing window: {}x{} -> {}x{}", current_width as i32, current_height as i32, new_width as i32, new_height as i32);
+                
+                // Calculate new position before resizing
+                if let Ok(new_position) = calculate_top_center_position(&window, new_width as u32) {
+                    // Set size and position atomically to reduce visual artifacts
+                    if let Err(e) = window.set_size(tauri::LogicalSize::new(new_width, new_height)) {
+                        eprintln!("Failed to resize window: {:?}", e);
+                    } else {
+                        // Set position immediately after resize
+                        if let Err(e) = window.set_position(new_position) {
+                            eprintln!("Failed to reposition window: {:?}", e);
+                    }
+                }
+            }
+        }
+    }
+}
+}
+
+#[tauri::command]
+fn resize_and_position_window(app: tauri::AppHandle, width: f64, height: f64, state: State<AppState>) {
+    // Rate limit resize operations to prevent excessive calls
+    {
+        let mut last_resize = state.last_resize_time.lock().unwrap();
+        let now = std::time::Instant::now();
+        if now.duration_since(*last_resize) < Duration::from_millis(300) {
+            println!("🚫 Resize and position rate limited");
+            return;
+        }
+        *last_resize = now;
+    }
+    
+    if let Some(window) = app.get_webview_window("main") {
+        // Only resize if window is visible
+        if let Ok(true) = window.is_visible() {
+            // Smaller, more refined minimums for minimal design
+            let new_width = width.max(480.0); // Smaller min width
+            let new_height = height.max(320.0); // Smaller min height
+            
+            // Get current window size for comparison
+            let current_size = window.inner_size().unwrap_or(tauri::PhysicalSize::new(480, 320));
+            let current_width = current_size.width as f64;
+            let current_height = current_size.height as f64;
+            
+            // Only resize if the size actually changes significantly
+            if (current_width - new_width).abs() > 20.0 || (current_height - new_height).abs() > 20.0 {
+                println!("📏 Resizing and positioning window: {}x{} -> {}x{}", current_width as i32, current_height as i32, new_width as i32, new_height as i32);
+                
+                // Calculate new position for the target size
+                if let Ok(new_position) = calculate_top_center_position(&window, new_width as u32) {
+                    // First set the position for the new size
+                    if let Err(e) = window.set_position(new_position) {
+                        eprintln!("❌ Failed to set position: {:?}", e);
+                        return;
+                    }
+                    
+                    // Then resize the window - this reduces visual jarring
+                    match window.set_size(tauri::LogicalSize::new(new_width, new_height)) {
+                        Ok(_) => {
+                            // Double-check position after resize to ensure it stays centered
+                            std::thread::sleep(Duration::from_millis(50)); // Brief pause
+                            if let Ok(final_position) = calculate_top_center_position(&window, new_width as u32) {
+                                let _ = window.set_position(final_position);
+                            }
+                            println!("✅ Window resized and positioned successfully");
+                        },
+                        Err(e) => {
+                            eprintln!("❌ Failed to resize window: {:?}", e);
+                        }
+                    }
+                } else {
+                    eprintln!("❌ Failed to calculate new position");
+                }
+            } else {
+                println!("⏭️ Skipping resize - size change too small");
+            }
+        } else {
+            println!("⚠️ Window not visible, skipping resize");
+        }
+    } else {
+        eprintln!("❌ Window not found");
+    }
 }
 
 #[tauri::command]
 fn set_ignore_cursor_events(app: tauri::AppHandle, ignore: bool) {
     if let Some(window) = app.get_webview_window("main") {
-        window.set_ignore_cursor_events(ignore).unwrap();
+        window.set_ignore_cursor_events(ignore).unwrap_or_else(|e| {
+            eprintln!("Failed to set ignore cursor events: {:?}", e);
+        });
     }
 }
 
 #[tauri::command]
-fn resize_window(app: tauri::AppHandle, height: f64) {
-    if let Some(window) = app.get_webview_window("main") {
-        if let Ok(true) = window.is_visible() {
-            if let Ok(Some(monitor)) = window.primary_monitor() {
-                let monitor_size = monitor.size();
-                let max_height = monitor_size.height as f64 * 0.9; // 90% of screen height
-                let new_height = height.min(max_height);
-
-                let current_size = window.outer_size().unwrap();
-                window.set_size(tauri::LogicalSize::new(current_size.width as f64 / monitor.scale_factor(), new_height / monitor.scale_factor())).unwrap();
-
-                // Recalculate and set position to keep it at the bottom
-                let new_pos = PhysicalPosition {
-                    x: (monitor_size.width as i32 - current_size.width as i32) / 2,
-                    y: monitor_size.height as i32 - (new_height as i32) - 40, // 40px buffer from bottom
-                };
-                window.set_position(new_pos).unwrap();
-            }
-        }
-    }
+fn quit_app(app: tauri::AppHandle) {
+    println!("Quit app command called");
+    app.exit(0);
 }
 
 fn main() {
@@ -152,6 +282,7 @@ fn main() {
             
             app.manage(AppState {
                 wake_word_detector: Arc::new(Mutex::new(detector)),
+                last_resize_time: Arc::new(Mutex::new(std::time::Instant::now())),
             });
             
             // Create system tray menu with proper IDs
@@ -170,7 +301,7 @@ fn main() {
             if let Some(window) = app.get_webview_window("main") {
                 window.set_ignore_cursor_events(true).unwrap();
             }
-
+            
             let _tray = TrayIconBuilder::new()
                 .menu(&menu)
                 .tooltip(tooltip)
@@ -211,6 +342,15 @@ fn main() {
                 .build(app)
                 .unwrap();
             
+            // Hide the main window after setup is complete
+            if let Some(window) = app.get_webview_window("main") {
+                // Give the window a moment to initialize before hiding
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                    window.hide().unwrap();
+                });
+            }
+            
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -220,6 +360,7 @@ fn main() {
             show_window,
             quit_app,
             resize_window,
+            resize_and_position_window,
             set_ignore_cursor_events,
         ])
         .build(tauri::generate_context!())
