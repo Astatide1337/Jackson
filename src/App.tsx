@@ -40,17 +40,17 @@ declare global {
 }
 
 function App() {
-  const [statusMessage, setStatusMessage] = useState(
+  const [, setStatusMessage] = useState(
     'Listening for "Hey Jackson"...'
   );
-  const [initializationError, setInitializationError] = useState(false);
+  const [, setInitializationError] = useState(false);
   const [isTauriContext, setIsTauriContext] = useState(false);
-  const [detectionCount, setDetectionCount] = useState(0);
+  const [, setDetectionCount] = useState(0);
   const [userSpeech, setUserSpeech] = useState("");
   const [isProcessing, setIsProcessing] = useState(false);
   const [isSpeechListening, setIsSpeechListening] = useState(false);
   const [isWindowVisible, setIsWindowVisible] = useState(false);
-  const [lastSpeechTime, setLastSpeechTime] = useState<Date>(new Date());
+  const [, setLastSpeechTime] = useState<Date>(new Date());
   const [wakeWordDetected, setWakeWordDetected] = useState(false);
   
   const speechTimeoutRef = useRef<NodeJS.Timeout | null>(null);
