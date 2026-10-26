@@ -6,6 +6,6 @@ import tailwindcss from "@tailwindcss/vite";
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   build: {
-    outDir: "../dist", // Tauri expects the build output to be in this directory
+    outDir: "dist", // src-tauri resolves frontendDist "../dist" from its own directory
   },
 });
