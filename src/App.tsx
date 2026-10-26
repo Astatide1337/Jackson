@@ -1,6 +1,6 @@
 // App.tsx - Fixed window resizing with content-based triggers
-import { useState, useEffect, useRef } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import "./index.css";
 
@@ -40,21 +40,22 @@ declare global {
 }
 
 function App() {
-  const [statusMessage, setStatusMessage] = useState(
+  const [, setStatusMessage] = useState(
     'Listening for "Hey Jackson"...'
   );
-  const [initializationError, setInitializationError] = useState(false);
-  const [isTauriContext, setIsTauriContext] = useState(false);
-  const [detectionCount, setDetectionCount] = useState(0);
+  const [, setInitializationError] = useState(false);
+  const [isTauriContext] = useState(isTauri);
+  const [, setDetectionCount] = useState(0);
   const [userSpeech, setUserSpeech] = useState("");
   const [isProcessing, setIsProcessing] = useState(false);
   const [isSpeechListening, setIsSpeechListening] = useState(false);
   const [isWindowVisible, setIsWindowVisible] = useState(false);
-  const [lastSpeechTime, setLastSpeechTime] = useState<Date>(new Date());
+  const [, setLastSpeechTime] = useState<Date>(new Date());
   const [wakeWordDetected, setWakeWordDetected] = useState(false);
   
   const speechTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const speechRecognitionRef = useRef<SpeechRecognition | null>(null);
+  const recognitionRestartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isRecognitionActiveRef = useRef(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const hasDetectedSpeechRef = useRef(false);
@@ -65,8 +66,92 @@ function App() {
   const lastResizeContentRef = useRef({ userSpeech: "", isProcessing: false });
   const pendingResizeRef = useRef(false);
   
-  // Initialize Web Speech API
-  const initializeSpeechRecognition = () => {
+  const windowVisibleRef = useRef(false);
+  const setWindowVisibility = useCallback((visible: boolean) => {
+    windowVisibleRef.current = visible;
+    setIsWindowVisible(visible);
+  }, []);
+
+  const stopSpeechRecognition = useCallback(() => {
+    if (recognitionRestartTimerRef.current) {
+      clearTimeout(recognitionRestartTimerRef.current);
+      recognitionRestartTimerRef.current = null;
+    }
+    if (speechRecognitionRef.current) {
+      isRecognitionActiveRef.current = false;
+      speechRecognitionRef.current.stop();
+      setIsSpeechListening(false);
+      setIsProcessing(false);
+      console.log("🛑 Stopping continuous speech recognition...");
+    }
+
+    // Clear speech timeout
+    if (speechTimeoutRef.current) {
+      clearTimeout(speechTimeoutRef.current);
+      speechTimeoutRef.current = null;
+    }
+  }, []);
+
+  const hideWindow = useCallback(() => {
+    stopSpeechRecognition();
+    setUserSpeech("");
+    setIsProcessing(false);
+    setWindowVisibility(false);
+    setWakeWordDetected(false);
+    hasDetectedSpeechRef.current = false;
+
+    // Reset resize state
+    isResizingRef.current = false;
+    pendingResizeRef.current = false;
+    lastResizeContentRef.current = { userSpeech: "", isProcessing: false };
+
+    if (isTauriContext) {
+      invoke("hide_window");
+    }
+
+    // Clear timeouts
+    if (speechTimeoutRef.current) {
+      clearTimeout(speechTimeoutRef.current);
+      speechTimeoutRef.current = null;
+    }
+    if (resizeTimeoutRef.current) {
+      clearTimeout(resizeTimeoutRef.current);
+      resizeTimeoutRef.current = null;
+    }
+  }, [isTauriContext, setWindowVisibility, stopSpeechRecognition]);
+
+  // Reset speech timeout - if no transcribed speech for 10 seconds, hide window
+  const resetSpeechTimeout = useCallback(() => {
+    if (speechTimeoutRef.current) {
+      clearTimeout(speechTimeoutRef.current);
+    }
+
+    speechTimeoutRef.current = setTimeout(() => {
+      console.log("🕐 No speech transcription for 10 seconds, hiding window");
+      hideWindow();
+    }, 10000); // 10 seconds of no transcribed speech
+  }, [hideWindow]);
+
+  const startSpeechRecognition = useCallback(() => {
+    if (speechRecognitionRef.current && !isRecognitionActiveRef.current) {
+      try {
+        isRecognitionActiveRef.current = true;
+        speechRecognitionRef.current.start();
+        setUserSpeech("");
+        setIsProcessing(false);
+        setLastSpeechTime(new Date());
+        hasDetectedSpeechRef.current = false;
+        resetSpeechTimeout();
+        console.log("🎙️ Starting continuous speech recognition...");
+      } catch (error) {
+        isRecognitionActiveRef.current = false;
+        console.error("Failed to start speech recognition:", error);
+        setStatusMessage("Failed to start speech recognition");
+      }
+    }
+  }, [resetSpeechTimeout]);
+
+  const initializeSpeechRecognition = useCallback(() => {
     if ("webkitSpeechRecognition" in window || "SpeechRecognition" in window) {
       const SpeechRecognition =
         window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -135,6 +220,7 @@ function App() {
           return;
         }
         if (event.error === "not-allowed") {
+          isRecognitionActiveRef.current = false;
           setStatusMessage(
             "Microphone access denied. Please allow microphone access."
           );
@@ -143,8 +229,9 @@ function App() {
           console.warn("Speech recognition error:", event.error);
           // Try to restart recognition after a brief delay
           if (isRecognitionActiveRef.current) {
-            setTimeout(() => {
-              if (isRecognitionActiveRef.current) {
+            if (recognitionRestartTimerRef.current) clearTimeout(recognitionRestartTimerRef.current);
+            recognitionRestartTimerRef.current = setTimeout(() => {
+              if (isRecognitionActiveRef.current && speechRecognitionRef.current === recognition) {
                 try {
                   recognition.start();
                 } catch (e) {
@@ -160,7 +247,7 @@ function App() {
         console.log("🛑 Web Speech Recognition ended");
         setIsSpeechListening(false);
         // Restart recognition if we're supposed to be listening
-        if (isRecognitionActiveRef.current && isWindowVisible) {
+        if (isRecognitionActiveRef.current && windowVisibleRef.current && speechRecognitionRef.current === recognition) {
           try {
             recognition.start();
           } catch (e) {
@@ -174,56 +261,10 @@ function App() {
       return true;
     }
     return false;
-  };
-  
-  const startSpeechRecognition = () => {
-    if (speechRecognitionRef.current && !isSpeechListening) {
-      try {
-        isRecognitionActiveRef.current = true;
-        speechRecognitionRef.current.start();
-        setUserSpeech("");
-        setIsProcessing(false);
-        setLastSpeechTime(new Date());
-        hasDetectedSpeechRef.current = false;
-        resetSpeechTimeout();
-        console.log("🎙️ Starting continuous speech recognition...");
-      } catch (error) {
-        console.error("Failed to start speech recognition:", error);
-        setStatusMessage("Failed to start speech recognition");
-      }
-    }
-  };
-  
-  const stopSpeechRecognition = () => {
-    if (speechRecognitionRef.current && isSpeechListening) {
-      isRecognitionActiveRef.current = false;
-      speechRecognitionRef.current.stop();
-      setIsSpeechListening(false);
-      setIsProcessing(false);
-      console.log("🛑 Stopping continuous speech recognition...");
-    }
-    
-    // Clear speech timeout
-    if (speechTimeoutRef.current) {
-      clearTimeout(speechTimeoutRef.current);
-      speechTimeoutRef.current = null;
-    }
-  };
-  
-  // Reset speech timeout - if no transcribed speech for 10 seconds, hide window
-  const resetSpeechTimeout = () => {
-    if (speechTimeoutRef.current) {
-      clearTimeout(speechTimeoutRef.current);
-    }
-    
-    speechTimeoutRef.current = setTimeout(() => {
-      console.log("🕐 No speech transcription for 10 seconds, hiding window");
-      hideWindow();
-    }, 10000); // 10 seconds of no transcribed speech
-  };
+  }, [hideWindow, resetSpeechTimeout]);
   
   // Calculate window size based on content - optimized for minimal design
-  const calculateWindowSize = () => {
+  const calculateWindowSize = useCallback(() => {
     if (!containerRef.current) return { width: 520, height: 220 };
     
     // Create a temporary clone to measure actual content size
@@ -252,10 +293,10 @@ function App() {
     const finalHeight = Math.min(contentHeight + 48, 600);
 
     return { width: finalWidth, height: finalHeight };
-  };
+  }, []);
   
   // Check if content change is significant enough to warrant a resize
-  const isSignificantContentChange = (newUserSpeech: string, newIsProcessing: boolean) => {
+  const isSignificantContentChange = useCallback((newUserSpeech: string, newIsProcessing: boolean) => {
     const lastContent = lastResizeContentRef.current;
     
     // Check for significant text length changes (more than 25 characters or 40% change)
@@ -274,10 +315,10 @@ function App() {
     
     // Significant if text length changed by more than 25 chars or 40%
     return speechLengthDiff > 25 || speechPercentChange > 0.4;
-  };
+  }, []);
   
   // Trigger window resize with content-based logic
-  const triggerWindowResize = (newUserSpeech: string, newIsProcessing: boolean) => {
+  const triggerWindowResize = useCallback((newUserSpeech: string, newIsProcessing: boolean) => {
     // Skip if we're already resizing or window is not visible
     if (!isTauriContext || !isWindowVisible || isResizingRef.current) {
       return;
@@ -334,85 +375,54 @@ function App() {
         isResizingRef.current = false;
       });
     }, 400); // Longer debounce for much smoother experience
-  };
+  }, [calculateWindowSize, isSignificantContentChange, isTauriContext, isWindowVisible]);
   
   // Content change monitoring effects
   useEffect(() => {
     triggerWindowResize(userSpeech, isProcessing);
-  }, [userSpeech, isProcessing, isWindowVisible]);
-  
-  const hideWindow = () => {
-    stopSpeechRecognition();
-    setUserSpeech("");
-    setIsProcessing(false);
-    setIsWindowVisible(false);
-    setWakeWordDetected(false);
-    hasDetectedSpeechRef.current = false;
-    
-    // Reset resize state
-    isResizingRef.current = false;
-    pendingResizeRef.current = false;
-    lastResizeContentRef.current = { userSpeech: "", isProcessing: false };
-    
-    if (isTauriContext) {
-      invoke("hide_window");
-    }
-    
-    // Clear timeouts
-    if (speechTimeoutRef.current) {
-      clearTimeout(speechTimeoutRef.current);
-      speechTimeoutRef.current = null;
-    }
-    if (resizeTimeoutRef.current) {
-      clearTimeout(resizeTimeoutRef.current);
-      resizeTimeoutRef.current = null;
-    }
-  };
+  }, [userSpeech, isProcessing, triggerWindowResize]);
   
   // Handle window visibility events
   useEffect(() => {
     let unlistenShow: (() => void) | undefined;
     let unlistenHide: (() => void) | undefined;
+    let disposed = false;
     
     if (isTauriContext) {
       // Listen for window show event
       listen("window-shown", () => {
-        setIsWindowVisible(true);
+        setWindowVisibility(true);
         // Reset resize state when window is shown
         isResizingRef.current = false;
         pendingResizeRef.current = false;
         console.log("✅ Window shown");
       }).then((unlisten) => {
-        unlistenShow = unlisten;
+        if (disposed) unlisten();
+        else unlistenShow = unlisten;
       });
       
       // Listen for window hide event
       listen("window-hidden", () => {
-        setIsWindowVisible(false);
+        stopSpeechRecognition();
+        setWindowVisibility(false);
         // Reset resize state when window is hidden
         isResizingRef.current = false;
         pendingResizeRef.current = false;
         console.log("🙈 Window hidden");
       }).then((unlisten) => {
-        unlistenHide = unlisten;
+        if (disposed) unlisten();
+        else unlistenHide = unlisten;
       });
     }
     
     return () => {
+      disposed = true;
       unlistenShow?.();
       unlistenHide?.();
     };
-  }, [isTauriContext]);
+  }, [isTauriContext, setWindowVisibility, stopSpeechRecognition]);
   
   useEffect(() => {
-    // Check if we're in a Tauri context
-    const checkTauriContext = () => {
-      const isTauri =
-        typeof window !== "undefined" && (window as any).__TAURI_INTERNALS__;
-      setIsTauriContext(isTauri);
-      return isTauri;
-    };
-    
     // Initialize speech recognition
     const speechSupported = initializeSpeechRecognition();
     if (!speechSupported) {
@@ -422,10 +432,12 @@ function App() {
     
     // This effect handles the lifecycle of the Tauri event listener.
     let unlisten: (() => void) | undefined;
+    let disposed = false;
+    let wakeTimer: ReturnType<typeof setTimeout> | undefined;
     
     const initialize = async () => {
       // Check if we are in a Tauri environment.
-      if (!checkTauriContext()) {
+      if (!isTauriContext) {
         console.warn("Tauri API not available, running in web mode");
         setStatusMessage("Web mode - limited functionality");
         return;
@@ -444,7 +456,7 @@ function App() {
           setUserSpeech("");
           setLastSpeechTime(new Date());
           setWakeWordDetected(true);
-          setIsWindowVisible(true);
+          setWindowVisibility(true);
           
           // Reset resize state on wake word detection
           isResizingRef.current = false;
@@ -455,13 +467,20 @@ function App() {
           
           // Start Web Speech API recognition and timeout
           if (speechSupported) {
-            setTimeout(() => {
+            clearTimeout(wakeTimer);
+            wakeTimer = setTimeout(() => {
+              if (disposed || !windowVisibleRef.current) return;
               startSpeechRecognition();
               resetSpeechTimeout();
             }, 500); // Small delay to ensure UI updates
           }
         });
         
+        if (disposed) {
+          unlisten();
+          return;
+        }
+
         // Start the backend wake word detection
         await invoke("start_wake_word_detection");
         setStatusMessage('Listening for "Hey Jackson"...');
@@ -485,7 +504,9 @@ function App() {
     
     // Cleanup function
     return () => {
+      disposed = true;
       clearTimeout(timer);
+      clearTimeout(wakeTimer);
       unlisten?.();
       if (speechTimeoutRef.current) {
         clearTimeout(speechTimeoutRef.current);
@@ -493,9 +514,17 @@ function App() {
       if (resizeTimeoutRef.current) {
         clearTimeout(resizeTimeoutRef.current);
       }
+      const recognition = speechRecognitionRef.current;
+      if (recognition) {
+        recognition.onstart = null;
+        recognition.onend = null;
+        recognition.onresult = null;
+        recognition.onerror = null;
+      }
       stopSpeechRecognition();
+      speechRecognitionRef.current = null;
     };
-  }, []);
+  }, [initializeSpeechRecognition, isTauriContext, resetSpeechTimeout, setWindowVisibility, startSpeechRecognition, stopSpeechRecognition]);
   
   // Only render the UI when wake word is detected and speech is active
   return (
