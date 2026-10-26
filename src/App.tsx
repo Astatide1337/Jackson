@@ -469,7 +469,7 @@ function App() {
           if (speechSupported) {
             clearTimeout(wakeTimer);
             wakeTimer = setTimeout(() => {
-              if (disposed) return;
+              if (disposed || !windowVisibleRef.current) return;
               startSpeechRecognition();
               resetSpeechTimeout();
             }, 500); // Small delay to ensure UI updates
